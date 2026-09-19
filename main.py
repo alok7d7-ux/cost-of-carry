@@ -55,12 +55,14 @@ def calculate_theoretical_future(spot_price, expiry_date, risk_free_rate, divide
     net_rate = risk_free_rate - dividend_yield
     fair_value = spot_price * math.exp(net_rate * T)
     coc = fair_value - spot_price
+    coc_pct = (coc / spot_price) * 100
 
     return {
         "expiry": expiry_date.strftime("%Y-%m-%d"),
         "days": days_to_expiry,
         "fair_value": round(fair_value, 2),
-        "coc": round(coc, 2)
+        "coc": round(coc, 2),
+        "coc_pct": round(coc_pct, 2)
     }
 
 def main():
@@ -80,10 +82,12 @@ def main():
     following_month_date = curr_expiry.replace(day=28) + datetime.timedelta(days=4)
     next_expiry = get_last_thursday(following_month_date.year, following_month_date.month)
 
-    header = f"{'Symbol':<12} | {'Spot (₹)':<10} | {'Near Fut':<10} | {'Near CoC':<10} | {'Next Fut':<10} | {'Next CoC':<10} | {'Spread':<10}"
+    header = f"{'Symbol':<12} | {'Spot (₹)':<10} | {'Near Fut':<10} | {'Near CoC':<10} | {'CoC %':<8} | {'Next Fut':<10} | {'Spread':<10}"
     print("=" * len(header))
     print(header)
     print("=" * len(header))
+
+    high_coc_alerts = []
 
     for symbol in NIFTY_50_STOCKS:
         spot_price = fetch_stock_spot(symbol)
@@ -93,10 +97,35 @@ def main():
         curr_fut = calculate_theoretical_future(spot_price, curr_expiry, RISK_FREE_RATE, DIVIDEND_YIELD)
         next_fut = calculate_theoretical_future(spot_price, next_expiry, RISK_FREE_RATE, DIVIDEND_YIELD)
         calendar_spread = round(next_fut["fair_value"] - curr_fut["fair_value"], 2)
+        spread_pct = round((calendar_spread / spot_price) * 100, 2)
 
-        print(f"{symbol:<12} | {round(spot_price, 2):<10.2f} | {curr_fut['fair_value']:<10.2f} | {curr_fut['coc']:<10.2f} | {next_fut['fair_value']:<10.2f} | {next_fut['coc']:<10.2f} | {calendar_spread:<10.2f}")
+        print(f"{symbol:<12} | {round(spot_price, 2):<10.2f} | {curr_fut['fair_value']:<10.2f} | {curr_fut['coc']:<10.2f} | {curr_fut['coc_pct']:<7.2f}% | {next_fut['fair_value']:<10.2f} | {calendar_spread:<10.2f}")
+
+        # Check for > 0.6% threshold
+        if curr_fut['coc_pct'] >= 0.6 or spread_pct >= 0.6:
+            high_coc_alerts.append({
+                "Symbol": symbol,
+                "Near_CoC_Pct": curr_fut['coc_pct'],
+                "Spread_Pct": spread_pct
+            })
 
     print("=" * len(header))
+
+    # Display Scanner Alerts
+    print("\n" + "#" * 60)
+    print("          FLAGGED STOCKS (CoC % or Spread % >= 0.6%)")
+    print("#" * 60)
+    
+    if high_coc_alerts:
+        for alert in high_coc_alerts:
+            print(f"-> {alert['Symbol']}: Near CoC = {alert['Near_CoC_Pct']}%, Calendar Spread % = {alert['Spread_Pct']}%")
+        print("\nINTRADAY RULE: Highly inflated premium detected.")
+        print("1. Directional Move: Buy Near-Fut IF price is above VWAP with volume.")
+        print("2. Spread Arbitrage: Short Near-Fut + Buy Spot/Next-Fut if premium is overextended.")
+    else:
+        print("No stocks currently exceeding 0.6% CoC threshold.")
+    
+    print("#" * 60 + "\n")
 
 if __name__ == "__main__":
     main()
