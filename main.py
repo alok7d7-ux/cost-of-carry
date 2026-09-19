@@ -1,7 +1,8 @@
+import json
 import math
 import datetime
+import urllib.request
 import pandas as pd
-import yfinance as yf
 
 # List of Nifty 50 Stock Tickers (NSE)
 NIFTY_50_STOCKS = [
@@ -28,13 +29,21 @@ def get_last_thursday(year, month):
     return last_day - datetime.timedelta(days=offset)
 
 def fetch_stock_spot(symbol):
-    """Fetches stock spot price safely."""
+    """Fetches stock spot price directly using HTTP request with User-Agent."""
     ticker_symbol = f"{symbol}.NS"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?range=5d&interval=1d"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    
     try:
-        data = yf.Ticker(ticker_symbol)
-        hist = data.history(period="5d")
-        if not hist.empty and "Close" in hist:
-            return hist["Close"].iloc[-1]
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode())
+            result = data['chart']['result'][0]
+            close_prices = result['indicators']['quote'][0]['close']
+            # Return last valid close price
+            valid_prices = [p for p in close_prices if p is not None]
+            if valid_prices:
+                return valid_prices[-1]
     except Exception:
         pass
     return None
@@ -65,13 +74,13 @@ def main():
     
     today = datetime.date.today()
     
-    # Current Month Expiry (Last Thursday of current month)
+    # Current Month Expiry
     curr_expiry = get_last_thursday(today.year, today.month)
     if curr_expiry < today:
         next_month_date = today.replace(day=28) + datetime.timedelta(days=4)
         curr_expiry = get_last_thursday(next_month_date.year, next_month_date.month)
 
-    # Next Month Expiry (Last Thursday of next month)
+    # Next Month Expiry
     following_month_date = curr_expiry.replace(day=28) + datetime.timedelta(days=4)
     next_expiry = get_last_thursday(following_month_date.year, following_month_date.month)
 
