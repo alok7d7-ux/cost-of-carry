@@ -2,7 +2,6 @@ import json
 import math
 import datetime
 import urllib.request
-import pandas as pd
 
 # List of Nifty 50 Stock Tickers (NSE)
 NIFTY_50_STOCKS = [
@@ -29,7 +28,7 @@ def get_last_thursday(year, month):
     return last_day - datetime.timedelta(days=offset)
 
 def fetch_stock_spot(symbol):
-    """Fetches stock spot price directly using HTTP request with User-Agent."""
+    """Fetches stock spot price directly via Yahoo Finance endpoint."""
     ticker_symbol = f"{symbol}.NS"
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?range=5d&interval=1d"
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
@@ -40,7 +39,6 @@ def fetch_stock_spot(symbol):
             data = json.loads(response.read().decode())
             result = data['chart']['result'][0]
             close_prices = result['indicators']['quote'][0]['close']
-            # Return last valid close price
             valid_prices = [p for p in close_prices if p is not None]
             if valid_prices:
                 return valid_prices[-1]
@@ -66,65 +64,39 @@ def calculate_theoretical_future(spot_price, expiry_date, risk_free_rate, divide
     }
 
 def main():
-    print("Fetching Nifty 50 Spot Prices & Calculating Cost of Carry...")
+    print("Fetching Nifty 50 Spot Prices & Calculating Cost of Carry...\n")
     
-    # Financial parameters for NSE Market
     RISK_FREE_RATE = 0.065  # ~6.5% RBI Repo Rate
     DIVIDEND_YIELD = 0.012  # ~1.2% Average Dividend Yield
     
     today = datetime.date.today()
     
-    # Current Month Expiry
+    # Calculate Expiries
     curr_expiry = get_last_thursday(today.year, today.month)
     if curr_expiry < today:
         next_month_date = today.replace(day=28) + datetime.timedelta(days=4)
         curr_expiry = get_last_thursday(next_month_date.year, next_month_date.month)
 
-    # Next Month Expiry
     following_month_date = curr_expiry.replace(day=28) + datetime.timedelta(days=4)
     next_expiry = get_last_thursday(following_month_date.year, following_month_date.month)
 
-    results = []
+    header = f"{'Symbol':<12} | {'Spot (₹)':<10} | {'Near Fut':<10} | {'Near CoC':<10} | {'Next Fut':<10} | {'Next CoC':<10} | {'Spread':<10}"
+    print("=" * len(header))
+    print(header)
+    print("=" * len(header))
 
     for symbol in NIFTY_50_STOCKS:
         spot_price = fetch_stock_spot(symbol)
         if spot_price is None:
             continue
 
-        curr_fut = calculate_theoretical_future(
-            spot_price, curr_expiry, RISK_FREE_RATE, DIVIDEND_YIELD
-        )
-        next_fut = calculate_theoretical_future(
-            spot_price, next_expiry, RISK_FREE_RATE, DIVIDEND_YIELD
-        )
-
+        curr_fut = calculate_theoretical_future(spot_price, curr_expiry, RISK_FREE_RATE, DIVIDEND_YIELD)
+        next_fut = calculate_theoretical_future(spot_price, next_expiry, RISK_FREE_RATE, DIVIDEND_YIELD)
         calendar_spread = round(next_fut["fair_value"] - curr_fut["fair_value"], 2)
 
-        results.append({
-            "Symbol": symbol,
-            "Spot (₹)": round(spot_price, 2),
-            "Near Expiry": curr_fut["expiry"],
-            "Near Fut (₹)": curr_fut["fair_value"],
-            "Near CoC (₹)": curr_fut["coc"],
-            "Next Expiry": next_fut["expiry"],
-            "Next Fut (₹)": next_fut["fair_value"],
-            "Next CoC (₹)": next_fut["coc"],
-            "Calendar Spread (₹)": calendar_spread
-        })
+        print(f"{symbol:<12} | {round(spot_price, 2):<10.2f} | {curr_fut['fair_value']:<10.2f} | {curr_fut['coc']:<10.2f} | {next_fut['fair_value']:<10.2f} | {next_fut['coc']:<10.2f} | {calendar_spread:<10.2f}")
 
-    print("\n" + "=" * 135)
-    print("                NIFTY 50 STOCKS - CURRENT & NEXT MONTH FUTURES COST OF CARRY")
-    print("=" * 135)
-
-    if results:
-        pd.set_option("display.max_rows", 60)
-        pd.set_option("display.width", 1000)
-        df = pd.DataFrame(results)
-        print(df.to_string(index=False))
-    else:
-        print("No market data retrieved.")
-
-    print("=" * 135 + "\n")
+    print("=" * len(header))
 
 if __name__ == "__main__":
     main()
