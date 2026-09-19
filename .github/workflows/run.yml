@@ -1,95 +1,23 @@
-import math
-import datetime
-import pandas as pd
-import yfinance as yf
+name: Cost of Carry Calculation
 
-def calculate_contract_metrics(spot_price, futures_ticker, risk_free_rate, dividend_yield, expiry_date):
-    """Calculates Fair Value and Cost of Carry for a single futures contract."""
-    futures_data = yf.Ticker(futures_ticker)
-    futures_hist = futures_data.history(period="5d")
-    
-    if futures_hist.empty:
-        return None
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
 
-    futures_price = futures_hist["Close"].iloc[-1]
-    
-    # Calculate Time to Expiration in years (T)
-    today = datetime.date.today()
-    days_to_expiry = (expiry_date - today).days
-    T = days_to_expiry / 365.0
-    
-    if T <= 0:
-        return None
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
 
-    # Theoretical Fair Value Formula: F = S * e^((r - q) * T)
-    net_rate = risk_free_rate - dividend_yield
-    fair_value = spot_price * math.exp(net_rate * T)
-    
-    # Cost of Carry Spread
-    actual_coc = futures_price - spot_price
-    theoretical_coc = fair_value - spot_price
-    mispricing = futures_price - fair_value
-    
-    return {
-        "Contract": futures_ticker,
-        "Expiry Date": expiry_date.strftime("%Y-%m-%d"),
-        "Days to Expiry": days_to_expiry,
-        "Futures Price": round(futures_price, 2),
-        "Fair Value": round(fair_value, 2),
-        "Actual CoC ($)": round(actual_coc, 2),
-        "Theoretical CoC ($)": round(theoretical_coc, 2),
-        "Mispricing ($)": round(mispricing, 2),
-        "Market State": "Contango" if actual_coc > 0 else "Backwardation"
-    }
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
 
-def main():
-    SPOT_SYMBOL = "^GSPC"
-    FRONT_MONTH_FUTURES = "ES=F"
-    NEXT_MONTH_FUTURES = "ESM27.CME"
-    
-    RISK_FREE_RATE = 0.045
-    DIVIDEND_YIELD = 0.013
-    
-    # Expiry Dates (Set for future dates in late 2026 / 2027)
-    CURRENT_MONTH_EXPIRY = datetime.date(2026, 12, 18)
-    NEXT_MONTH_EXPIRY = datetime.date(2027, 3, 19)
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-    spot_data = yf.Ticker(SPOT_SYMBOL)
-    spot_hist = spot_data.history(period="5d")
-    
-    if spot_hist.empty:
-        print("Failed to fetch spot data.")
-        return
-
-    spot_price = spot_hist["Close"].iloc[-1]
-
-    contracts = [
-        (FRONT_MONTH_FUTURES, CURRENT_MONTH_EXPIRY, "Current Period"),
-        (NEXT_MONTH_FUTURES, NEXT_MONTH_EXPIRY, "Next Period")
-    ]
-
-    results = []
-    for ticker, expiry, month_label in contracts:
-        metrics = calculate_contract_metrics(
-            spot_price=spot_price,
-            futures_ticker=ticker,
-            risk_free_rate=RISK_FREE_RATE,
-            dividend_yield=DIVIDEND_YIELD,
-            expiry_date=expiry
-        )
-        if metrics:
-            metrics["Period"] = month_label
-            results.append(metrics)
-
-    print(f"\nSpot Symbol: {SPOT_SYMBOL} | Current Spot Price: {round(spot_price, 2)}")
-    print("=" * 95)
-    if results:
-        df = pd.DataFrame(results)
-        cols = ["Period", "Contract", "Expiry Date", "Days to Expiry", "Futures Price", "Fair Value", "Actual CoC ($)", "Mispricing ($)", "Market State"]
-        print(df[cols].to_string(index=False))
-    else:
-        print("No valid contract metrics generated.")
-    print("=" * 95 + "\n")
-
-if __name__ == "__main__":
-    main()
+      - name: Run Main Script
+        run: python main.py
