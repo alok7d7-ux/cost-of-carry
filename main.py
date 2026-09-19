@@ -17,99 +17,101 @@ NIFTY_50_STOCKS = [
     "TATAMOTORS", "TATASTEEL", "TECHM", "TITAN", "ULTRACEMCO"
 ]
 
-def fetch_last_close(symbol):
-    """Fetches the latest close price for a given ticker."""
+def get_last_thursday(year, month):
+    """Calculates the last Thursday of a given month (NSE Expiry Day)."""
+    # Start from the last day of the month
+    if month == 12:
+        last_day = datetime.date(year, 12, 31)
+    else:
+        last_day = datetime.date(year, month + 1, 1) - datetime.timedelta(days=1)
+    
+    # 3 is Thursday (Monday=0, Tuesday=1, ..., Thursday=3, ..., Sunday=6)
+    offset = (last_day.weekday() - 3) % 7
+    return last_day - datetime.timedelta(days=offset)
+
+def fetch_stock_spot(symbol):
+    """Fetches spot price safely from Yahoo Finance for NSE stocks."""
+    ticker_symbol = f"{symbol}.NS"
     try:
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="5d")
+        data = yf.Ticker(ticker_symbol)
+        hist = data.history(period="5d")
         if not hist.empty:
             return hist["Close"].iloc[-1]
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Error fetching {symbol}: {e}")
     return None
 
-def calculate_contract_metrics(spot_price, futures_ticker, risk_free_rate, dividend_yield, expiry_date):
-    """Calculates Fair Value and Cost of Carry for a specific futures contract."""
-    futures_price = fetch_last_close(futures_ticker)
-    
-    # Fallback to spot price if futures tick is not directly available
-    if futures_price is None:
-        futures_price = spot_price
-
+def calculate_theoretical_future(spot_price, expiry_date, risk_free_rate, dividend_yield):
+    """Calculates theoretical fair value and cost of carry for a given expiry date."""
     today = datetime.date.today()
     days_to_expiry = max((expiry_date - today).days, 1)
     T = days_to_expiry / 365.0
 
-    # Theoretical Fair Value Formula: F = S * e^((r - q) * T)
     net_rate = risk_free_rate - dividend_yield
     fair_value = spot_price * math.exp(net_rate * T)
-
-    actual_coc = futures_price - spot_price
-    mispricing = futures_price - fair_value
+    coc = fair_value - spot_price
 
     return {
-        "Futures Price": round(futures_price, 2),
-        "Fair Value": round(fair_value, 2),
-        "CoC (₹)": round(actual_coc, 2),
-        "Mispricing (₹)": round(mispricing, 2),
-        "Days to Expiry": days_to_expiry
+        "expiry": expiry_date.strftime("%Y-%m-%d"),
+        "days": days_to_expiry,
+        "fair_value": round(fair_value, 2),
+        "coc": round(coc, 2)
     }
 
 def main():
-    print("Fetching Nifty 50 Current Month & Next Month Futures data...")
+    print("Calculating Current Month & Next Month Cost of Carry for Nifty 50...")
     
-    # Market Parameters
+    # Financial parameters for NSE Market
     RISK_FREE_RATE = 0.065  # ~6.5% RBI Repo Rate
     DIVIDEND_YIELD = 0.012  # ~1.2% Average Dividend Yield
     
-    # NSE Monthly Expiry Dates (Last Thursday of current & next month)
-    CURRENT_MONTH_EXPIRY = datetime.date(2026, 9, 24)
-    NEXT_MONTH_EXPIRY = datetime.date(2026, 10, 29)
+    today = datetime.date.today()
+    
+    # Calculate Current Month Expiry (Last Thursday of current month)
+    curr_expiry = get_last_thursday(today.year, today.month)
+    if curr_expiry < today:
+        # If today is past this month's expiry, move to next month
+        next_month_date = today.replace(day=28) + datetime.timedelta(days=4)
+        curr_expiry = get_last_thursday(next_month_date.year, next_month_date.month)
+
+    # Calculate Next Month Expiry (Last Thursday of next month)
+    following_month_date = curr_expiry.replace(day=28) + datetime.timedelta(days=4)
+    next_expiry = get_last_thursday(following_month_date.year, following_month_date.month)
 
     results = []
 
     for symbol in NIFTY_50_STOCKS:
-        spot_ticker = f"{symbol}.NS"
-        curr_fut_ticker = f"{symbol}1!.NS"  # Front-month continuous contract
-        next_fut_ticker = f"{symbol}2!.NS"  # Next-month continuous contract
-
-        spot_price = fetch_last_close(spot_ticker)
+        spot_price = fetch_stock_spot(symbol)
         if spot_price is None:
             continue
 
-        # Current Month Metrics
-        curr_metrics = calculate_contract_metrics(
-            spot_price=spot_price,
-            futures_ticker=curr_fut_ticker,
-            risk_free_rate=RISK_FREE_RATE,
-            dividend_yield=DIVIDEND_YIELD,
-            expiry_date=CURRENT_MONTH_EXPIRY
+        # Current Month Calculations
+        curr_fut = calculate_theoretical_future(
+            spot_price, curr_expiry, RISK_FREE_RATE, DIVIDEND_YIELD
         )
 
-        # Next Month Metrics
-        next_metrics = calculate_contract_metrics(
-            spot_price=spot_price,
-            futures_ticker=next_fut_ticker,
-            risk_free_rate=RISK_FREE_RATE,
-            dividend_yield=DIVIDEND_YIELD,
-            expiry_date=NEXT_MONTH_EXPIRY
+        # Next Month Calculations
+        next_fut = calculate_theoretical_future(
+            spot_price, next_expiry, RISK_FREE_RATE, DIVIDEND_YIELD
         )
+
+        calendar_spread = round(next_fut["fair_value"] - curr_fut["fair_value"], 2)
 
         results.append({
             "Symbol": symbol,
             "Spot (₹)": round(spot_price, 2),
-            "Near Fut (₹)": curr_metrics["Futures Price"],
-            "Near FairVal (₹)": curr_metrics["Fair Value"],
-            "Near CoC (₹)": curr_metrics["CoC (₹)"],
-            "Next Fut (₹)": next_metrics["Futures Price"],
-            "Next FairVal (₹)": next_metrics["Fair Value"],
-            "Next CoC (₹)": next_metrics["CoC (₹)"],
-            "Calendar Spread (₹)": round(next_metrics["Futures Price"] - curr_metrics["Futures Price"], 2)
+            "Near Expiry": curr_fut["expiry"],
+            "Near Fut (₹)": curr_fut["fair_value"],
+            "Near CoC (₹)": curr_fut["coc"],
+            "Next Expiry": next_fut["expiry"],
+            "Next Fut (₹)": next_fut["fair_value"],
+            "Next CoC (₹)": next_fut["coc"],
+            "Calendar Spread (₹)": calendar_spread
         })
 
-    print("\n" + "=" * 125)
-    print("                 NIFTY 50 STOCKS - CURRENT MONTH & NEXT MONTH FUTURES ANALYSIS")
-    print("=" * 125)
+    print("\n" + "=" * 135)
+    print("                NIFTY 50 STOCKS - CURRENT & NEXT MONTH FUTURES COST OF CARRY")
+    print("=" * 135)
 
     if results:
         pd.set_option("display.max_rows", 60)
@@ -117,9 +119,9 @@ def main():
         df = pd.DataFrame(results)
         print(df.to_string(index=False))
     else:
-        print("Failed to fetch market data.")
+        print("No stock data was fetched.")
 
-    print("=" * 125 + "\n")
+    print("=" * 135 + "\n")
 
 if __name__ == "__main__":
     main()
